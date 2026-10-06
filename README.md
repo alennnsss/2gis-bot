@@ -12,7 +12,7 @@
 ├── db.js
 ├── schema.sql
 ├── package.json
-├── .env.example
+├── .env            (локально, не в git)
 ├── .gitignore
 ├── index.html
 ├── src/
@@ -43,7 +43,7 @@ brew services start postgresql
 
 ## 3. .env
 
-Скопируй `.env.example` в `.env` и заполни:
+Создай в корне проекта файл `.env` со своими ключами:
 
 ```env
 API_TOKEN=токен_бота
