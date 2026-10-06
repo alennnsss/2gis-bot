@@ -107,45 +107,70 @@ export async function updateSetting(chatId, field, value) {
   return result.rows[0];
 }
 
-export async function saveLead(lead, city, category) {
-  await pool.query(
-    `INSERT INTO leads
-      (source_id, name, address, phone, mobile, site, kind, city, category, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-     ON CONFLICT (source_id) DO UPDATE SET
-       name = EXCLUDED.name,
-       address = EXCLUDED.address,
-       phone = EXCLUDED.phone,
-       mobile = EXCLUDED.mobile,
-       site = EXCLUDED.site,
-       kind = EXCLUDED.kind,
-       city = EXCLUDED.city,
-       category = EXCLUDED.category,
-       updated_at = NOW()`,
-    [
-      lead.id, lead.name, lead.address, lead.phone, lead.mobile,
-      lead.site, lead.kind, city, category
-    ]
-  );
-}
+// Сохраняет поиск и все его компании одной транзакцией:
+// при ошибке не остаётся «полусохранённого» поиска.
+// city/category у компании — где её нашли впервые, поэтому при повторной
+// встрече они не перезаписываются (данные конкретного поиска лежат в searches).
+export async function saveSearchWithLeads(chatId, city, category, leads) {
+  const client = await pool.connect();
 
-export async function createSearch(chatId, city, category) {
-  const result = await pool.query(
-    `INSERT INTO searches (chat_id, city, category)
-     VALUES ($1, $2, $3)
-     RETURNING id`,
-    [chatId, city, category]
-  );
-  return result.rows[0].id;
-}
+  try {
+    await client.query("BEGIN");
 
-export async function addSearchResult(searchId, sourceId, position) {
-  await pool.query(
-    `INSERT INTO search_results (search_id, source_id, position)
-     VALUES ($1, $2, $3)
-     ON CONFLICT DO NOTHING`,
-    [searchId, sourceId, position]
-  );
+    const search = await client.query(
+      `INSERT INTO searches (chat_id, city, category)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [chatId, city, category]
+    );
+    const searchId = search.rows[0].id;
+
+    await client.query(
+      `INSERT INTO leads
+        (source_id, name, address, phone, mobile, site, kind, city, category, updated_at)
+       SELECT u.source_id, u.name, u.address, u.phone, u.mobile, u.site, u.kind,
+              $8, $9, NOW()
+       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[],
+                   $5::boolean[], $6::text[], $7::text[])
+         AS u(source_id, name, address, phone, mobile, site, kind)
+       ON CONFLICT (source_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         address = EXCLUDED.address,
+         phone = EXCLUDED.phone,
+         mobile = EXCLUDED.mobile,
+         site = EXCLUDED.site,
+         kind = EXCLUDED.kind,
+         updated_at = NOW()`,
+      [
+        leads.map((l) => l.id),
+        leads.map((l) => l.name),
+        leads.map((l) => l.address),
+        leads.map((l) => l.phone),
+        leads.map((l) => l.mobile),
+        leads.map((l) => l.site),
+        leads.map((l) => l.kind),
+        city,
+        category,
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO search_results (search_id, source_id, position)
+       SELECT $1, u.source_id, (u.ord - 1)::int
+       FROM unnest($2::text[]) WITH ORDINALITY AS u(source_id, ord)
+       ON CONFLICT DO NOTHING`,
+      [searchId, leads.map((l) => l.id)]
+    );
+
+    await client.query("COMMIT");
+
+    return searchId;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function markContacted(chatId, sourceId, contactedState) {
@@ -170,6 +195,14 @@ export async function isContacted(chatId, sourceId) {
     [chatId, sourceId]
   );
   return result.rowCount > 0;
+}
+
+export async function getContactedIds(chatId) {
+  const result = await pool.query(
+    `SELECT source_id FROM contacted WHERE chat_id = $1`,
+    [chatId]
+  );
+  return new Set(result.rows.map((row) => row.source_id));
 }
 
 export async function getContactedCount(chatId) {
@@ -236,18 +269,6 @@ export async function getLastSearchLeads(chatId) {
   if (!search) return null;
   const leads = await getSearchLeads(search.id, chatId);
   return { search, leads };
-}
-
-export async function getHiddenCount(chatId, searchId) {
-  const result = await pool.query(
-    `SELECT COUNT(*)::int AS count
-     FROM search_results sr
-     JOIN contacted c
-       ON c.chat_id = $1 AND c.source_id = sr.source_id
-     WHERE sr.search_id = $2`,
-    [chatId, searchId]
-  );
-  return result.rows[0].count;
 }
 
 export async function closeDb() {
