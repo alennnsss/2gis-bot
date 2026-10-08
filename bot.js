@@ -21,6 +21,7 @@ const API_TOKEN = process.env.API_TOKEN;
 const GEOAPIFY_KEY = process.env.GEOAPIFY_KEY;
 const OWNER_ID = Number(process.env.OWNER_ID);
 const MAX_PLACES = Number(process.env.MAX_PLACES) || 1500;
+const MAX_PLACES_KZ = Number(process.env.MAX_PLACES_KZ) || 3000;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || "Алматы";
 const PAGE_SIZE = 5;
 
@@ -259,31 +260,136 @@ async function fetchPlaces(category, placeId, total) {
   return features;
 }
 
-async function search(chatId, categoryName, category, city) {
+const COUNTRY_NAME = "Казахстан";
+
+const COUNTRY_ALIASES = new Set([
+  "казахстан",
+  "весь казахстан",
+  "по всему казахстану",
+  "кз",
+  "kz",
+  "рк",
+]);
+
+/*
+ * Поиск по всей стране идёт по областям, а не одним запросом:
+ * Geoapify отдаёт места по стране в географическом порядке,
+ * и с лимитом мы бы получили только запад Казахстана.
+ */
+const KZ_REGIONS = [
+  ["Астана", "city"],
+  ["Алматы", "city"],
+  ["Шымкент", "city"],
+  ["Абайская область", "state"],
+  ["Акмолинская область", "state"],
+  ["Актюбинская область", "state"],
+  ["Алматинская область", "state"],
+  ["Атырауская область", "state"],
+  ["Восточно-Казахстанская область", "state"],
+  ["Жамбылская область", "state"],
+  ["Жетысуская область", "state"],
+  ["Западно-Казахстанская область", "state"],
+  ["Карагандинская область", "state"],
+  ["Костанайская область", "state"],
+  ["Кызылординская область", "state"],
+  ["Мангистауская область", "state"],
+  ["Павлодарская область", "state"],
+  ["Северо-Казахстанская область", "state"],
+  ["Туркестанская область", "state"],
+  ["Улытауская область", "state"],
+];
+
+// place_id областей не меняются — не тратим лимит Geoapify на каждый поиск.
+const regionCache = new Map();
+
+function isWholeCountry(city) {
+  return COUNTRY_ALIASES.has(
+    city.trim().toLowerCase().replace(/\s+/g, " ")
+  );
+}
+
+async function geocodePlace(text, type) {
   const geocode = new URL(
     "https://api.geoapify.com/v1/geocode/search"
   );
 
-  geocode.searchParams.set("text", city);
+  geocode.searchParams.set("text", text);
   // Без type=city первым результатом может оказаться улица или здание.
-  geocode.searchParams.set("type", "city");
+  geocode.searchParams.set("type", type);
   geocode.searchParams.set("bias", "countrycode:kz");
   geocode.searchParams.set("format", "json");
   geocode.searchParams.set("apiKey", GEOAPIFY_KEY);
 
   const geo = await getJson(geocode);
 
-  const place = geo.results?.[0];
+  return geo.results?.[0]?.place_id ?? null;
+}
 
-  if (!place) {
-    throw new Error(`Город «${city}» не найден`);
+async function resolvePlaces(city) {
+  if (!isWholeCountry(city)) {
+    const placeId = await geocodePlace(city, "city");
+
+    if (!placeId) {
+      throw new Error(`Город «${city}» не найден`);
+    }
+
+    return [placeId];
   }
 
-  const features = await fetchPlaces(
-    category,
-    place.place_id,
-    MAX_PLACES
-  );
+  const ids = [];
+
+  for (const [name, type] of KZ_REGIONS) {
+    if (!regionCache.has(name)) {
+      const placeId = await geocodePlace(name, type);
+
+      if (!placeId) {
+        console.warn(`Регион «${name}» не найден, пропускаю`);
+        continue;
+      }
+
+      regionCache.set(name, placeId);
+    }
+
+    ids.push(regionCache.get(name));
+  }
+
+  if (ids.length === 0) {
+    throw new Error("Не удалось определить регионы Казахстана");
+  }
+
+  return ids;
+}
+
+async function search(chatId, categoryName, category, city) {
+  const placeIds = await resolvePlaces(city);
+
+  const limit = isWholeCountry(city)
+    ? MAX_PLACES_KZ
+    : MAX_PLACES;
+
+  const perPlace = Math.ceil(limit / placeIds.length);
+
+  const features = [];
+
+  let failed = 0;
+  let lastError = null;
+
+  for (const placeId of placeIds) {
+    try {
+      features.push(
+        ...(await fetchPlaces(category, placeId, perPlace))
+      );
+    } catch (error) {
+      failed++;
+      lastError = error;
+
+      console.warn(`Регион пропущен: ${error.message}`);
+    }
+  }
+
+  if (failed === placeIds.length && lastError) {
+    throw lastError;
+  }
 
   const settings = await getSettings(
     chatId,
@@ -830,6 +936,7 @@ const HELP =
   "Поиск компаний без сайта и с телефоном.\n\n" +
   "/search кафе Алматы — поиск по категории\n" +
   "/search все Алматы — все категории\n" +
+  "/search кафе Казахстан — по всему Казахстану (все области)\n" +
   "/business Алматы — основные категории\n" +
   "/categories — список категорий\n" +
   "/social — вкл/выкл компании только с соцсетью\n" +
@@ -909,9 +1016,16 @@ async function handleSearch(
   const chatId =
     ctx.chat.id;
 
-  const city =
+  const cityInput =
     (cityRaw ||
       DEFAULT_CITY).trim();
+
+  const wholeCountry =
+    isWholeCountry(cityInput);
+
+  const city = wholeCountry
+    ? COUNTRY_NAME
+    : cityInput;
 
   const category =
     CATEGORIES[
@@ -934,7 +1048,10 @@ async function handleSearch(
 
   try {
     await ctx.reply(
-      `Ищу: ${categoryName}, ${city}...`
+      `Ищу: ${categoryName}, ${city}...` +
+        (wholeCountry
+          ? "\nИщу по всем областям, это может занять пару минут."
+          : "")
     );
 
     const {
