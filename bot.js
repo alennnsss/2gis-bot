@@ -963,11 +963,6 @@ bot.command("last", async (ctx) => {
     session
   );
 });
-
-
-/*
- * Переключение страницы
- */
 bot.callbackQuery(
   /^page:(\d+)$/,
   async (ctx) => {
@@ -1311,9 +1306,6 @@ bot.command(
 );
 
 
-/*
- * Сброс отметок
- */
 bot.command(
   "clear",
   async (ctx) => {
@@ -1341,9 +1333,7 @@ bot.command(
 );
 
 
-/*
- * Обработка ошибок
- */
+
 bot.catch((error) => {
   console.error(
     "Ошибка бота:",
