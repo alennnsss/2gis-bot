@@ -271,11 +271,6 @@ const COUNTRY_ALIASES = new Set([
   "рк",
 ]);
 
-/*
- * Поиск по всей стране идёт по областям, а не одним запросом:
- * Geoapify отдаёт места по стране в географическом порядке,
- * и с лимитом мы бы получили только запад Казахстана.
- */
 const KZ_REGIONS = [
   ["Астана", "city"],
   ["Алматы", "city"],
@@ -299,7 +294,6 @@ const KZ_REGIONS = [
   ["Улытауская область", "state"],
 ];
 
-// place_id областей не меняются — не тратим лимит Geoapify на каждый поиск.
 const regionCache = new Map();
 
 function isWholeCountry(city) {
