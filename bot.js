@@ -6,23 +6,22 @@ import {
   pool,
   getSettings,
   updateSetting,
-  saveLead,
-  createSearch,
-  addSearchResult,
+  saveSearchWithLeads,
   markContacted,
+  getContactedIds,
   getContactedCount,
   clearContacted,
   getSearch,
   getLatestSearch,
   getSearchLeads,
   getLastSearchLeads,
-  getHiddenCount,
 } from "./db.js";
 
 const API_TOKEN = process.env.API_TOKEN;
 const GEOAPIFY_KEY = process.env.GEOAPIFY_KEY;
 const OWNER_ID = Number(process.env.OWNER_ID);
 const MAX_PLACES = Number(process.env.MAX_PLACES) || 1500;
+const MAX_PLACES_KZ = Number(process.env.MAX_PLACES_KZ) || 3000;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || "Алматы";
 const PAGE_SIZE = 5;
 
@@ -90,7 +89,12 @@ function esc(value) {
 
 function isSocial(link) {
   try {
-    const host = new URL(link)
+    // В OSM ссылки часто без схемы: "instagram.com/cafe".
+    const withScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(link)
+      ? link
+      : `https://${link}`;
+
+    const host = new URL(withScheme)
       .hostname
       .replace(/^www\./, "")
       .toLowerCase();
@@ -103,8 +107,9 @@ function isSocial(link) {
   }
 }
 
+// Казахстан (+7 70x/747/77x) и Россия (+7 9xx).
 function isMobile(phone) {
-  return /^\+7(70[0-8]|747|77[1-8])/.test(phone);
+  return /^\+7(70[0-8]|747|77[1-8]|9\d\d)/.test(phone);
 }
 
 function parseOnePhone(value) {
@@ -206,6 +211,9 @@ async function fetchPlaces(category, placeId, total) {
 
   const features = [];
 
+  let failed = 0;
+  let lastError = null;
+
   for (const group of groups) {
     try {
       for (let offset = 0; offset < perGroup; offset += 100) {
@@ -234,46 +242,165 @@ async function fetchPlaces(category, placeId, total) {
         }
       }
     } catch (error) {
+      failed++;
+      lastError = error;
+
       console.warn(
         `Группа «${group}» пропущена: ${error.message}`
       );
     }
   }
 
+  // Если не сработала ни одна группа (неверный ключ, лимит и т.п.),
+  // это ошибка, а не «ничего не найдено».
+  if (failed === groups.length && lastError) {
+    throw lastError;
+  }
+
   return features;
 }
 
-async function search(chatId, categoryName, category, city) {
+const COUNTRY_NAME = "Казахстан";
+
+const COUNTRY_ALIASES = new Set([
+  "казахстан",
+  "весь казахстан",
+  "по всему казахстану",
+  "кз",
+  "kz",
+  "рк",
+]);
+
+/*
+ * Поиск по всей стране идёт по областям, а не одним запросом:
+ * Geoapify отдаёт места по стране в географическом порядке,
+ * и с лимитом мы бы получили только запад Казахстана.
+ */
+const KZ_REGIONS = [
+  ["Астана", "city"],
+  ["Алматы", "city"],
+  ["Шымкент", "city"],
+  ["Абайская область", "state"],
+  ["Акмолинская область", "state"],
+  ["Актюбинская область", "state"],
+  ["Алматинская область", "state"],
+  ["Атырауская область", "state"],
+  ["Восточно-Казахстанская область", "state"],
+  ["Жамбылская область", "state"],
+  ["Жетысуская область", "state"],
+  ["Западно-Казахстанская область", "state"],
+  ["Карагандинская область", "state"],
+  ["Костанайская область", "state"],
+  ["Кызылординская область", "state"],
+  ["Мангистауская область", "state"],
+  ["Павлодарская область", "state"],
+  ["Северо-Казахстанская область", "state"],
+  ["Туркестанская область", "state"],
+  ["Улытауская область", "state"],
+];
+
+// place_id областей не меняются — не тратим лимит Geoapify на каждый поиск.
+const regionCache = new Map();
+
+function isWholeCountry(city) {
+  return COUNTRY_ALIASES.has(
+    city.trim().toLowerCase().replace(/\s+/g, " ")
+  );
+}
+
+async function geocodePlace(text, type) {
   const geocode = new URL(
     "https://api.geoapify.com/v1/geocode/search"
   );
 
-  geocode.searchParams.set("text", city);
+  geocode.searchParams.set("text", text);
+  // Без type=city первым результатом может оказаться улица или здание.
+  geocode.searchParams.set("type", type);
   geocode.searchParams.set("bias", "countrycode:kz");
   geocode.searchParams.set("format", "json");
   geocode.searchParams.set("apiKey", GEOAPIFY_KEY);
 
   const geo = await getJson(geocode);
 
-  const place = geo.results?.[0];
+  return geo.results?.[0]?.place_id ?? null;
+}
 
-  if (!place) {
-    throw new Error(`Город «${city}» не найден`);
+async function resolvePlaces(city) {
+  if (!isWholeCountry(city)) {
+    const placeId = await geocodePlace(city, "city");
+
+    if (!placeId) {
+      throw new Error(`Город «${city}» не найден`);
+    }
+
+    return [placeId];
   }
 
-  const features = await fetchPlaces(
-    category,
-    place.place_id,
-    MAX_PLACES
-  );
+  const ids = [];
+
+  for (const [name, type] of KZ_REGIONS) {
+    if (!regionCache.has(name)) {
+      const placeId = await geocodePlace(name, type);
+
+      if (!placeId) {
+        console.warn(`Регион «${name}» не найден, пропускаю`);
+        continue;
+      }
+
+      regionCache.set(name, placeId);
+    }
+
+    ids.push(regionCache.get(name));
+  }
+
+  if (ids.length === 0) {
+    throw new Error("Не удалось определить регионы Казахстана");
+  }
+
+  return ids;
+}
+
+async function search(chatId, categoryName, category, city) {
+  const placeIds = await resolvePlaces(city);
+
+  const limit = isWholeCountry(city)
+    ? MAX_PLACES_KZ
+    : MAX_PLACES;
+
+  const perPlace = Math.ceil(limit / placeIds.length);
+
+  const features = [];
+
+  let failed = 0;
+  let lastError = null;
+
+  for (const placeId of placeIds) {
+    try {
+      features.push(
+        ...(await fetchPlaces(category, placeId, perPlace))
+      );
+    } catch (error) {
+      failed++;
+      lastError = error;
+
+      console.warn(`Регион пропущен: ${error.message}`);
+    }
+  }
+
+  if (failed === placeIds.length && lastError) {
+    throw lastError;
+  }
 
   const settings = await getSettings(
     chatId,
     DEFAULT_TEMPLATE
   );
 
+  const contactedIds = await getContactedIds(chatId);
+
   const leads = [];
   const seen = new Set();
+  let hidden = 0;
 
   for (const feature of features) {
     const properties = feature.properties ?? {};
@@ -311,14 +438,15 @@ async function search(chatId, categoryName, category, city) {
       continue;
     }
 
+    // Ищем компании с телефоном — и без сайта, и только с соцсетью.
+    if (!phone) {
+      continue;
+    }
+
     let kind;
     let site = null;
 
     if (sites.length === 0) {
-      if (!phone) {
-        continue;
-      }
-
       kind = "noSite";
     } else {
       kind = "social";
@@ -329,9 +457,15 @@ async function search(chatId, categoryName, category, city) {
       continue;
     }
 
-    const mobile = phone ? isMobile(phone) : false;
+    const mobile = isMobile(phone);
 
     if (settings.only_mobile && !mobile) {
+      continue;
+    }
+
+    // Уже отмеченные «написал» в новых поисках не показываем.
+    if (contactedIds.has(sourceId)) {
+      hidden++;
       continue;
     }
 
@@ -369,36 +503,15 @@ async function search(chatId, categoryName, category, city) {
   return {
     leads,
     total: seen.size,
+    hidden,
   };
 }
 
-async function saveSearch(chatId, city, categoryName, leads) {
-  const searchId = await createSearch(
-    chatId,
-    city,
-    categoryName
-  );
-
-  for (let index = 0; index < leads.length; index++) {
-    const lead = leads[index];
-
-    await saveLead(
-      lead,
-      city,
-      categoryName
-    );
-
-    await addSearchResult(
-      searchId,
-      lead.id,
-      index
-    );
-  }
-
-  return searchId;
-}
+// Категорию сравниваем в нижнем регистре,
+// а город оставляем как ввёл пользователь.
 function parseQuery(text = "") {
-  const normalized = text.trim().toLowerCase();
+  const original = text.trim();
+  const normalized = original.toLowerCase();
 
   if (!normalized) {
     return {
@@ -408,10 +521,10 @@ function parseQuery(text = "") {
   }
 
   if (normalized.includes(",")) {
-    const [category, ...rest] = normalized.split(",");
+    const [category, ...rest] = original.split(",");
 
     return {
-      cat: category.trim(),
+      cat: category.trim().toLowerCase(),
       city: rest.join(",").trim() || DEFAULT_CITY,
     };
   }
@@ -430,15 +543,15 @@ function parseQuery(text = "") {
     return {
       cat: key,
       city:
-        normalized.slice(key.length).trim() ||
+        original.slice(key.length).trim() ||
         DEFAULT_CITY,
     };
   }
 
-  const [first, ...rest] = normalized.split(/\s+/);
+  const [first, ...rest] = original.split(/\s+/);
 
   return {
-    cat: first,
+    cat: first.toLowerCase(),
     city: rest.join(" ") || DEFAULT_CITY,
   };
 }
@@ -600,7 +713,7 @@ function renderPage(chatId, session) {
             } ${
               start + index + 1
             }`,
-            `done:${
+            `done:${session.searchId}:${
               start + index
             }`
           );
@@ -615,7 +728,7 @@ function renderPage(chatId, session) {
       if (session.page > 0) {
         keyboard.text(
           "◀ Назад",
-          `page:${
+          `page:${session.searchId}:${
             session.page - 1
           }`
         );
@@ -627,7 +740,7 @@ function renderPage(chatId, session) {
       ) {
         keyboard.text(
           "Вперёд ▶",
-          `page:${
+          `page:${session.searchId}:${
             session.page + 1
           }`
         );
@@ -655,22 +768,27 @@ async function showPage(
     session
   );
 
-  const options = {
-    parse_mode: "HTML",
-    reply_markup: keyboard,
-    link_preview_options: {
-      is_disabled: true,
-    },
-  };
+  const options =
+    pageOptions(keyboard);
 
   if (!edit) {
-    await ctx.reply(
-      text,
-      options
-    );
+    const message =
+      await ctx.reply(
+        text,
+        options
+      );
+
+    // Запоминаем сообщение, чтобы /clear мог его перерисовать.
+    session.messageId =
+      message.message_id;
 
     return;
   }
+
+  session.messageId =
+    ctx.callbackQuery?.message
+      ?.message_id ??
+    session.messageId;
 
   try {
     await ctx.editMessageText(
@@ -678,14 +796,106 @@ async function showPage(
       options
     );
   } catch (error) {
-    if (
-      !String(error)
-        .toLowerCase()
-        .includes("not modified")
-    ) {
-      throw error;
-    }
+    ignoreNotModified(error);
   }
+}
+
+
+function pageOptions(keyboard) {
+  return {
+    parse_mode: "HTML",
+    reply_markup: keyboard,
+    link_preview_options: {
+      is_disabled: true,
+    },
+  };
+}
+
+
+function ignoreNotModified(error) {
+  if (
+    !String(error)
+      .toLowerCase()
+      .includes("not modified")
+  ) {
+    throw error;
+  }
+}
+
+
+/*
+ * Перерисовать последнее сообщение с результатами
+ * (например, после /clear).
+ */
+async function redrawPage(
+  api,
+  chatId,
+  session
+) {
+  if (!session.messageId) {
+    return;
+  }
+
+  const {
+    text,
+    keyboard,
+  } = await renderPage(
+    chatId,
+    session
+  );
+
+  try {
+    await api.editMessageText(
+      chatId,
+      session.messageId,
+      text,
+      pageOptions(keyboard)
+    );
+  } catch (error) {
+    // Сообщение могло быть удалено или слишком старое —
+    // это не повод ронять команду.
+    console.warn(
+      "Не удалось перерисовать страницу:",
+      error.message ?? error
+    );
+  }
+}
+
+
+/*
+ * Сессия для кнопки.
+ * В callback_data лежит searchId, поэтому кнопка
+ * из старого сообщения работает со своим поиском,
+ * а не с тем, что сейчас в памяти.
+ */
+async function getSessionFor(
+  chatId,
+  searchId
+) {
+  const current =
+    sessions.get(chatId);
+
+  if (
+    current &&
+    current.searchId === searchId
+  ) {
+    return current;
+  }
+
+  const session =
+    await loadSession(
+      chatId,
+      searchId
+    );
+
+  if (session) {
+    sessions.set(
+      chatId,
+      session
+    );
+  }
+
+  return session;
 }
 
 
@@ -726,6 +936,7 @@ const HELP =
   "Поиск компаний без сайта и с телефоном.\n\n" +
   "/search кафе Алматы — поиск по категории\n" +
   "/search все Алматы — все категории\n" +
+  "/search кафе Казахстан — по всему Казахстану (все области)\n" +
   "/business Алматы — основные категории\n" +
   "/categories — список категорий\n" +
   "/social — вкл/выкл компании только с соцсетью\n" +
@@ -746,9 +957,22 @@ bot.use(
       ctx.from?.id !==
       OWNER_ID
     ) {
-      return ctx.reply?.(
-        "Нет доступа."
-      );
+      if (ctx.callbackQuery) {
+        return ctx.answerCallbackQuery(
+          {
+            text: "Нет доступа.",
+            show_alert: true,
+          }
+        );
+      }
+
+      if (ctx.chat) {
+        return ctx.reply(
+          "Нет доступа."
+        );
+      }
+
+      return;
     }
 
     await next();
@@ -792,9 +1016,16 @@ async function handleSearch(
   const chatId =
     ctx.chat.id;
 
-  const city =
+  const cityInput =
     (cityRaw ||
       DEFAULT_CITY).trim();
+
+  const wholeCountry =
+    isWholeCountry(cityInput);
+
+  const city = wholeCountry
+    ? COUNTRY_NAME
+    : cityInput;
 
   const category =
     CATEGORIES[
@@ -817,12 +1048,16 @@ async function handleSearch(
 
   try {
     await ctx.reply(
-      `Ищу: ${categoryName}, ${city}...`
+      `Ищу: ${categoryName}, ${city}...` +
+        (wholeCountry
+          ? "\nИщу по всем областям, это может занять пару минут."
+          : "")
     );
 
     const {
       leads,
       total,
+      hidden,
     } = await search(
       chatId,
       categoryName,
@@ -830,8 +1065,20 @@ async function handleSearch(
       city
     );
 
+    // Пустой поиск не сохраняем, иначе он «затирает»
+    // предыдущий результат для /last, /stats и /export.
+    if (leads.length === 0) {
+      return ctx.reply(
+        `Проверено: ${total}. Подходящих новых компаний нет.` +
+          (hidden
+            ? `\nСкрыто уже обработанных: ${hidden}.`
+            : "") +
+          "\n\nМожно включить компании только с соцсетью: /social"
+      );
+    }
+
     const searchId =
-      await saveSearch(
+      await saveSearchWithLeads(
         chatId,
         city,
         categoryName,
@@ -844,22 +1091,9 @@ async function handleSearch(
         searchId
       );
 
-    if (
-      !session ||
-      session.leads.length === 0
-    ) {
-      const hidden =
-        await getHiddenCount(
-          chatId,
-          searchId
-        );
-
-      return ctx.reply(
-        `Проверено: ${total}. Подходящих новых компаний нет.` +
-          (hidden
-            ? `\nСкрыто уже обработанных: ${hidden}.`
-            : "") +
-          "\n\nМожно включить компании только с соцсетью: /social"
+    if (!session) {
+      throw new Error(
+        "Не удалось загрузить сохранённый поиск"
       );
     }
 
@@ -881,8 +1115,11 @@ async function handleSearch(
         `Только соцсети: ${
           leads.length -
           noSite
-        }\n\n` +
-        `Источник данных: Geoapify/OpenStreetMap.\n` +
+        }\n` +
+        (hidden
+          ? `Скрыто уже обработанных: ${hidden}\n`
+          : "") +
+        `\nИсточник данных: Geoapify/OpenStreetMap.\n` +
         `Ссылка «проверить сайт» открывает поиск официального сайта компании.`
     );
 
@@ -909,7 +1146,7 @@ bot.command("search", async (ctx) => {
     );
   }
 
-  await handleSearch(
+  startSearch(
     ctx,
     cat,
     city
@@ -917,14 +1154,39 @@ bot.command("search", async (ctx) => {
 });
 
 
-bot.command("business", (ctx) =>
-  handleSearch(
+bot.command("business", (ctx) => {
+  startSearch(
     ctx,
     "бизнес",
     ctx.match.trim() ||
       DEFAULT_CITY
-  )
-);
+  );
+});
+
+
+/*
+ * grammY обрабатывает обновления по одному.
+ * Если ждать поиск прямо в обработчике, бот «замирает»
+ * на всё время поиска (кнопки не отвечают).
+ * Поэтому поиск запускаем в фоне, а от повторного
+ * запуска защищает busy.
+ */
+function startSearch(
+  ctx,
+  categoryName,
+  city
+) {
+  handleSearch(
+    ctx,
+    categoryName,
+    city
+  ).catch((error) =>
+    console.error(
+      "Ошибка поиска:",
+      error
+    )
+  );
+}
 
 
 bot.command("last", async (ctx) => {
@@ -964,11 +1226,12 @@ bot.command("last", async (ctx) => {
   );
 });
 bot.callbackQuery(
-  /^page:(\d+)$/,
+  /^page:(\d+):(\d+)$/,
   async (ctx) => {
     const session =
-      sessions.get(
-        ctx.chat.id
+      await getSessionFor(
+        ctx.chat.id,
+        Number(ctx.match[1])
       );
 
     if (!session) {
@@ -982,7 +1245,7 @@ bot.callbackQuery(
     }
 
     session.page = Number(
-      ctx.match[1]
+      ctx.match[2]
     );
 
     await showPage(
@@ -1000,13 +1263,16 @@ bot.callbackQuery(
  * Кнопка "написал"
  */
 bot.callbackQuery(
-  /^done:(\d+)$/,
+  /^done:(\d+):(\d+)$/,
   async (ctx) => {
     const chatId =
       ctx.chat.id;
 
     const session =
-      sessions.get(chatId);
+      await getSessionFor(
+        chatId,
+        Number(ctx.match[1])
+      );
 
     if (!session) {
       return ctx.answerCallbackQuery(
@@ -1019,7 +1285,7 @@ bot.callbackQuery(
     }
 
     const index = Number(
-      ctx.match[1]
+      ctx.match[2]
     );
 
     const lead =
@@ -1029,13 +1295,29 @@ bot.callbackQuery(
       return ctx.answerCallbackQuery();
     }
 
-    lead.done = !lead.done;
+    const done = !lead.done;
 
-    await markContacted(
-      chatId,
-      lead.id,
-      lead.done
-    );
+    // Сначала пишем в БД, и только при успехе меняем память —
+    // иначе отметка в памяти разойдётся с базой.
+    try {
+      await markContacted(
+        chatId,
+        lead.id,
+        done
+      );
+    } catch (error) {
+      console.error(error);
+
+      return ctx.answerCallbackQuery(
+        {
+          text:
+            "Не удалось сохранить отметку, попробуй ещё раз.",
+          show_alert: true,
+        }
+      );
+    }
+
+    lead.done = done;
 
     await showPage(
       ctx,
@@ -1051,6 +1333,23 @@ bot.callbackQuery(
       }
     );
   }
+);
+
+
+/*
+ * Кнопки старого формата (без searchId) и прочие
+ * неизвестные нажатия — отвечаем, чтобы кнопка не «крутилась».
+ */
+bot.on(
+  "callback_query:data",
+  (ctx) =>
+    ctx.answerCallbackQuery(
+      {
+        text:
+          "Кнопка устарела. Используй /last.",
+        show_alert: true,
+      }
+    )
 );
 
 
@@ -1324,6 +1623,13 @@ bot.command(
           lead.done = false;
         }
       );
+
+      // Убираем ✅ и в уже показанном сообщении.
+      await redrawPage(
+        ctx.api,
+        ctx.chat.id,
+        session
+      );
     }
 
     await ctx.reply(
@@ -1351,6 +1657,14 @@ async function shutdown(
   console.log(
     `${signal}: завершаю работу...`
   );
+
+  // bot.stop() подтверждает offset последнего обновления,
+  // иначе после перезапуска оно может обработаться повторно.
+  try {
+    await bot.stop();
+  } catch (error) {
+    console.error(error);
+  }
 
   await pool.end();
 
