@@ -103,4 +103,15 @@ code { display: block; padding: 10px 12px; border-radius: 9px; background: #0b0d
   font: inherit; font-size: 13px; padding: 7px 10px;
 }
 .lang button.active { background: #20252d; color: #f4f7fb; }
-.about { min-height: 50vh; }
+.about { display: grid; grid-template-columns: 1fr 280px; gap: 40px; align-items: center; }
+.about-photo { margin: 0; }
+.about-photo img {
+  display: block; width: 100%; height: auto; aspect-ratio: 3 / 4;
+  object-fit: cover; object-position: 50% 80%;
+  border-radius: 20px; border: 1px solid #252a31;
+}
+.about-photo figcaption { margin-top: 10px; text-align: center; color: #8f99a7; font-size: 14px; }
+@media (max-width: 700px) {
+  .about { grid-template-columns: 1fr; gap: 28px; }
+  .about-photo { max-width: 280px; }
+}

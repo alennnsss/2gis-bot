@@ -53,6 +53,7 @@ const messages = {
       title: "О нас",
       text: "Меня зовут Sain Alen. Я разрабатываю Siteless — Telegram-бота, который помогает находить клиентов без сайта.",
       github: "Мой GitHub",
+      photo: "Sain Alen в детстве",
     },
     footer: {
       data: "Данные: Geoapify / OpenStreetMap",
@@ -109,6 +110,7 @@ const messages = {
       title: "About us",
       text: "My name is Sain Alen. I build Siteless — a Telegram bot that helps you find clients without a website.",
       github: "My GitHub",
+      photo: "Sain Alen as a kid",
     },
     footer: {
       data: "Data: Geoapify / OpenStreetMap",
