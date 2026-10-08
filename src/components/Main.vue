@@ -1,13 +1,19 @@
 <script setup>
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 const email = "sainalenkz@gmail.com";
+const bot = "@newitgis_bot";
 const botUrl = "https://t.me/newitgis_bot";
-const mailto =
-  `mailto:${email}?subject=` +
-  encodeURIComponent("Доступ к боту Siteless") +
-  "&body=" +
-  encodeURIComponent("Здравствуйте! Хочу получить доступ к боту Siteless.\n\nМой Telegram: @\nГород / ниша: ");
+const mailto = computed(
+  () =>
+    `mailto:${email}?subject=` +
+    encodeURIComponent(t("access.subject")) +
+    "&body=" +
+    encodeURIComponent(t("access.body"))
+);
 
 const copied = ref(false);
 
@@ -21,90 +27,74 @@ async function copyEmail() {
   }
 }
 
-const features = [
-  { title: "Без сайта", text: "Только компании с телефоном и без настоящего сайта" },
-  { title: "Мобильные", text: "Фильтр мобильных номеров KZ и RU — сразу в WhatsApp" },
-  { title: "Весь Казахстан", text: "Поиск по городу или сразу по 20 регионам страны" },
-  { title: "CSV", text: "Экспорт найденных лидов в Excel одной командой" },
-];
-
-const steps = [
-  { title: "Ищете", text: "Пишете боту категорию и город, например «кафе Алматы»." },
-  { title: "Фильтруете", text: "Бот отбрасывает компании с сайтом и без телефона, мобильные номера идут первыми." },
-  { title: "Пишете", text: "Ссылка на WhatsApp с вашим шаблоном. Отметка «написал» скрывает компанию из следующих поисков." },
-];
+// тексты — в src/i18n.js, здесь только ключи
+const features = ["nosite", "mobile", "country", "csv"];
+const steps = ["search", "filter", "write"];
 
 const commands = [
-  ["/search кафе Алматы", "поиск по категории и городу"],
-  ["/search кафе Казахстан", "поиск по всей стране"],
-  ["/business Алматы", "основные категории бизнеса"],
-  ["/mobile", "только мобильные номера"],
-  ["/social", "показывать компании с одной соцсетью"],
-  ["/template <текст>", "шаблон сообщения для WhatsApp"],
-  ["/export", "выгрузка в CSV"],
-  ["/last", "открыть последний поиск"],
-  ["/stats", "статистика и настройки"],
+  ["/search кафе Алматы", "search"],
+  ["/search кафе Казахстан", "country"],
+  ["/business Алматы", "business"],
+  ["/mobile", "mobile"],
+  ["/social", "social"],
+  ["/template …", "template"],
+  ["/export", "export"],
+  ["/last", "last"],
+  ["/stats", "stats"],
 ];
 </script>
 
 <template>
   <main id="top" class="container page">
     <section class="hero">
-      <div class="badge">Telegram-бот для поиска лидов</div>
+      <div class="badge">{{ t("hero.badge") }}</div>
       <h1>Siteless</h1>
-      <p>
-        Находит компании, у которых нет сайта, но есть телефон. Готовый список
-        клиентов для веб-студий и фрилансеров: с WhatsApp-ссылками,
-        отметками «написал» и экспортом в CSV.
-      </p>
+      <p>{{ t("hero.text") }}</p>
       <div class="buttons">
-        <a :href="botUrl" class="btn" target="_blank" rel="noopener">Открыть @newitgis_bot</a>
-        <a href="#access" class="btn secondary">Получить доступ</a>
+        <a :href="botUrl" class="btn" target="_blank" rel="noopener">{{ t("hero.open", { bot }) }}</a>
+        <a href="#access" class="btn secondary">{{ t("hero.access") }}</a>
       </div>
     </section>
 
     <section class="grid">
-      <article v-for="f in features" :key="f.title" class="card">
-        <strong>{{ f.title }}</strong>
-        <span>{{ f.text }}</span>
+      <article v-for="f in features" :key="f" class="card">
+        <strong>{{ t(`features.${f}.title`) }}</strong>
+        <span>{{ t(`features.${f}.text`) }}</span>
       </article>
     </section>
 
     <section id="how" class="block">
-      <h2>Как это работает</h2>
+      <h2>{{ t("how.title") }}</h2>
       <ol class="steps">
-        <li v-for="(s, i) in steps" :key="s.title">
+        <li v-for="(s, i) in steps" :key="s">
           <span class="step-num">{{ i + 1 }}</span>
           <div>
-            <strong>{{ s.title }}</strong>
-            <p>{{ s.text }}</p>
+            <strong>{{ t(`how.${s}.title`) }}</strong>
+            <p>{{ t(`how.${s}.text`) }}</p>
           </div>
         </li>
       </ol>
     </section>
 
     <section id="commands" class="block">
-      <h2>Команды бота</h2>
+      <h2>{{ t("commands.title") }}</h2>
       <ul class="commands">
-        <li v-for="[cmd, desc] in commands" :key="cmd">
+        <li v-for="[cmd, key] in commands" :key="cmd">
           <code>{{ cmd }}</code>
-          <span>{{ desc }}</span>
+          <span>{{ t(`commands.${key}`) }}</span>
         </li>
       </ul>
     </section>
 
     <section id="access" class="block access">
-      <h2>Получить доступ</h2>
-      <p>
-        Бот закрытый: работает только для одобренных пользователей.
-        Напишите на почту, укажите свой Telegram, и я открою доступ к @newitgis_bot.
-      </p>
+      <h2>{{ t("access.title") }}</h2>
+      <p>{{ t("access.text", { bot }) }}</p>
       <div class="email-row">
-        <a :href="mailto" class="btn">Написать на {{ email }}</a>
+        <a :href="mailto" class="btn">{{ t("access.write", { email }) }}</a>
         <button type="button" class="btn secondary" @click="copyEmail">
-          {{ copied ? "Скопировано" : "Скопировать email" }}
+          {{ copied ? t("access.copied") : t("access.copy") }}
         </button>
-        <a :href="botUrl" class="btn secondary" target="_blank" rel="noopener">Открыть бота в Telegram</a>
+        <a :href="botUrl" class="btn secondary" target="_blank" rel="noopener">{{ t("access.openBot") }}</a>
       </div>
     </section>
   </main>
