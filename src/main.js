@@ -5,8 +5,8 @@ const App = {
   template: `
     <main class="page">
       <section class="hero">
-        <div class="badge">Telegram Lead Finder</div>
-        <h1>Lead Finder Bot</h1>
+        <div class="badge">Telegram-бот для поиска лидов</div>
+        <h1>Siteless</h1>
         <p>
           Поиск компаний без обычного сайта с сохранением лидов,
           настроек и истории в PostgreSQL.

@@ -1,8 +1,8 @@
 # CLAUDE.md
 
 ## О проекте
-Telegram-бот для поиска компаний без сайта (лидов) с телефоном. Бот работает только для владельца (`OWNER_ID`).
-Источник данных: Geoapify (Places и Geocoding API), а не 2GIS. Название историческое.
+Siteless (пакет `siteless-bot`, раньше `2gis-bot`) — Telegram-бот для поиска компаний без сайта (лидов) с телефоном. Бот работает только для владельца (`OWNER_ID`).
+Источник данных: Geoapify (Places и Geocoding API), а не 2GIS.
 Стек: Node.js (ESM, `"type": "module"`), grammY, PostgreSQL (`pg`), dotenv. Фронтенд: Vue 3 + Vite.
 
 ## Структура
@@ -11,6 +11,7 @@ Telegram-бот для поиска компаний без сайта (лидо
 - `schema.sql` — схема БД (справочно; реальная схема создаётся в `db.js` → `initDb`)
 - `index.html`, `src/` — фронтенд (Vue + Vite)
 - `public/` — статика
+- `assets/` — иконка бота (`bot-icon.svg` — исходник, `bot-icon.png` — 512×512 для @BotFather)
 
 ## Команды
 - `npm install` — зависимости
