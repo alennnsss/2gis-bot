@@ -1,0 +1,19 @@
+<script setup>
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
+const github = "https://github.com/alennnsss";
+</script>
+
+<template>
+  <main class="container page">
+    <section class="hero about">
+      <div class="badge">{{ t("about.title") }}</div>
+      <h1>Sain Alen</h1>
+      <p>{{ t("about.text") }}</p>
+      <div class="buttons">
+        <a :href="github" class="btn" target="_blank" rel="noopener">{{ t("about.github") }}</a>
+      </div>
+    </section>
+  </main>
+</template>
