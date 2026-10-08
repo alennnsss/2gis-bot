@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2AABEE"/>
+      <stop offset="1" stop-color="#1E5BD8"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.08"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- окно браузера: "сайт" -->
+  <g transform="translate(92 116)">
+    <rect x="0" y="0" width="230" height="170" rx="22" fill="#FFFFFF"/>
+    <path d="M22 0h186a22 22 0 0 1 22 22v24H0V22A22 22 0 0 1 22 0z" fill="#DCE8FB"/>
+    <circle cx="26" cy="23" r="7" fill="#FF5F57"/>
+    <circle cx="48" cy="23" r="7" fill="#FEBC2E"/>
+    <circle cx="70" cy="23" r="7" fill="#28C840"/>
+    <rect x="24" y="70" width="120" height="14" rx="7" fill="#C9D6EA"/>
+    <rect x="24" y="96" width="170" height="14" rx="7" fill="#C9D6EA"/>
+    <rect x="24" y="122" width="90" height="14" rx="7" fill="#C9D6EA"/>
+    <!-- перечёркнуто: сайта нет -->
+    <line x1="40" y1="150" x2="190" y2="60" stroke="#FF4D5E" stroke-width="18" stroke-linecap="round"/>
+  </g>
+  <!-- лупа: поиск -->
+  <line x1="350" y1="350" x2="392" y2="392" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="298" cy="298" r="62" fill="#1E6FE0"/>
+  <circle cx="298" cy="298" r="62" fill="url(#lens)" stroke="#FFFFFF" stroke-width="20"/>
+  <path d="M268 290a32 32 0 0 1 26-24" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" opacity="0.8"/>
+</svg>
