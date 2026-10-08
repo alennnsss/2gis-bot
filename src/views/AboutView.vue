@@ -18,7 +18,6 @@ const github = "https://github.com/alennnsss";
       </div>
       <figure class="about-photo">
         <img src="/sain-alen.jpg" :alt="t('about.photo')" width="720" height="1280" />
-        <figcaption>{{ t("about.photo") }}</figcaption>
       </figure>
     </section>
   </main>

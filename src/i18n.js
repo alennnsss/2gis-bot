@@ -1,6 +1,5 @@
 import { createI18n } from "vue-i18n";
 
-// Символы @ { } | в текстах — служебные для vue-i18n, их передаём через параметры
 const messages = {
   ru: {
     nav: {
@@ -53,7 +52,6 @@ const messages = {
       title: "О нас",
       text: "Меня зовут Sain Alen. Я разрабатываю Siteless — Telegram-бота, который помогает находить клиентов без сайта.",
       github: "Мой GitHub",
-      photo: "Sain Alen в детстве",
     },
     footer: {
       data: "Данные: Geoapify / OpenStreetMap",
