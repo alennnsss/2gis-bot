@@ -52,9 +52,12 @@ OWNER_ID=твой_telegram_id
 DATABASE_URL=postgresql://postgres:пароль@localhost:5432/leadfinder
 DEFAULT_CITY=Алматы
 MAX_PLACES=1500
+MAX_PLACES_KZ=3000
 ```
 
 `OWNER_ID` обязателен.
+
+`MAX_PLACES` — сколько мест проверять при поиске по одному городу, `MAX_PLACES_KZ` — при поиске по всему Казахстану (делится поровну между 17 областями и городами Астана, Алматы, Шымкент).
 
 ## 4. Запуск бота
 
@@ -84,6 +87,8 @@ npm run build
 /search кафе Алматы
 /search все Алматы
 /business Алматы
+/search кафе Казахстан
+/business весь Казахстан
 /categories
 /social
 /mobile
@@ -93,6 +98,8 @@ npm run build
 /last
 /clear
 ```
+
+Вместо города можно написать `Казахстан`, `весь Казахстан`, `КЗ` или `РК` — тогда поиск идёт по всем областям страны. Такой поиск дольше (до пары минут) и тратит больше запросов Geoapify.
 
 ## Что хранится в PostgreSQL
 
