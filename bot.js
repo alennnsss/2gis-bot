@@ -3,18 +3,26 @@ import "dotenv/config";
 
 import {
   initDb,
-  pool,
+  closeDb,
   getSettings,
   updateSetting,
   saveSearchWithLeads,
-  markContacted,
+  setLeadStatus,
+  setLeadNote,
   getContactedIds,
-  getContactedCount,
+  getStatusCounts,
+  getPipeline,
   clearContacted,
   getSearch,
   getLatestSearch,
   getSearchLeads,
   getLastSearchLeads,
+  takeSearchSlot,
+  getSearchesToday,
+  getAccess,
+  requestAccess,
+  setAccessStatus,
+  listAccess,
 } from "./db.js";
 
 const API_TOKEN = process.env.API_TOKEN;
@@ -24,6 +32,22 @@ const MAX_PLACES = Number(process.env.MAX_PLACES) || 1500;
 const MAX_PLACES_KZ = Number(process.env.MAX_PLACES_KZ) || 3000;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || "Алматы";
 const PAGE_SIZE = 5;
+// Лимит поисков в сутки для одобренных пользователей (на владельца не действует).
+const DAILY_SEARCH_LIMIT = Number(process.env.DAILY_SEARCH_LIMIT) || 10;
+
+// Статусы компании в CRM. Кнопка с номером переключает их по кругу.
+const STATUSES = {
+  contacted: { icon: "✅", label: "написал" },
+  replied: { icon: "💬", label: "ответил" },
+  client: { icon: "🤝", label: "клиент" },
+  rejected: { icon: "❌", label: "отказ" },
+};
+const STATUS_CYCLE = [null, "contacted", "replied", "client", "rejected"];
+
+function nextStatus(status) {
+  const index = STATUS_CYCLE.indexOf(status ?? null);
+  return STATUS_CYCLE[(index + 1) % STATUS_CYCLE.length];
+}
 
 const DEFAULT_TEMPLATE =
   "Здравствуйте! Увидел {name} на карте. Могу сделать сайт под ваш бизнес, интересно?";
@@ -162,13 +186,6 @@ function buildWa(lead, template) {
   )}`;
 }
 
-/*
- * ВАЖНО:
- * Эта функция теперь всегда создаёт ссылку заново.
- *
- * Поэтому даже если lead.check отсутствует в PostgreSQL,
- * кнопка "проверить сайт" всё равно будет работать.
- */
 function buildCheckUrl(name, city) {
   const query = `"${name}" ${city} официальный сайт`;
 
@@ -354,7 +371,7 @@ async function resolvePlaces(city) {
   return ids;
 }
 
-async function search(chatId, categoryName, category, city) {
+async function search(chatId, category, city) {
   const placeIds = await resolvePlaces(city);
 
   const limit = isWholeCountry(city)
@@ -475,15 +492,6 @@ async function search(chatId, categoryName, category, city) {
       mobile,
       site,
       kind,
-
-      // Ссылка создаётся здесь.
-      // Но ниже мы также создаём её при отображении,
-      // поэтому отсутствие check в БД больше не проблема.
-      check: buildCheckUrl(
-        String(properties.name),
-        city
-      ),
-
       done: false,
     };
 
@@ -551,18 +559,8 @@ function parseQuery(text = "") {
 }
 
 
-/*
- * Формируем текст одной компании.
- *
- * Раньше здесь было:
- *
- *   lead.check
- *
- * Но после загрузки компании из PostgreSQL
- * этого поля могло уже не быть.
- *
- * Теперь ссылка всегда строится через buildCheckUrl().
- */
+// Текст одной компании. Ссылка «проверить сайт» строится заново,
+// потому что в БД она не хранится.
 function leadText(
   lead,
   number,
@@ -571,7 +569,7 @@ function leadText(
 ) {
   const lines = [
     `<b>${number}. ${
-      lead.done ? "✅ " : ""
+      lead.status ? `${STATUSES[lead.status].icon} ` : ""
     }${esc(lead.name)}</b>`,
   ];
 
@@ -595,6 +593,10 @@ function leadText(
     );
   }
 
+  if (lead.note) {
+    lines.push(`📝 ${esc(lead.note)}`);
+  }
+
   const links = [];
 
   /*
@@ -613,12 +615,6 @@ function leadText(
     );
   }
 
-  /*
-   * Проверка сайта.
-   *
-   * Даже если lead.check отсутствует,
-   * ссылка всё равно будет создана.
-   */
   const checkUrl = buildCheckUrl(
     lead.name,
     city
@@ -678,7 +674,8 @@ function renderPage(chatId, session) {
         }/${pages} · найдено ${
           session.leads.length
         }\n` +
-        `Кнопка с номером отмечает «написал».\n\n` +
+        `Кнопка с номером меняет статус: 📩 → ✅ написал → 💬 ответил → 🤝 клиент → ❌ отказ.\n` +
+        `Заметка: /note номер текст\n\n` +
         slice
           .map(
             (lead, index) =>
@@ -701,8 +698,8 @@ function renderPage(chatId, session) {
         (lead, index) => {
           keyboard.text(
             `${
-              lead.done
-                ? "✅"
+              lead.status
+                ? STATUSES[lead.status].icon
                 : "📩"
             } ${
               start + index + 1
@@ -930,47 +927,225 @@ const HELP =
   "Поиск компаний без сайта и с телефоном.\n\n" +
   "/search кафе Алматы — поиск по категории\n" +
   "/search все Алматы — все категории\n" +
-  "/search кафе Казахстан — по всему Казахстану (все области)\n" +
   "/business Алматы — основные категории\n" +
   "/categories — список категорий\n" +
   "/social — вкл/выкл компании только с соцсетью\n" +
   "/mobile — вкл/выкл только мобильные номера\n" +
   "/export — выгрузить последний результат в CSV\n" +
   "/template текст — изменить текст WhatsApp\n" +
+  "/note номер текст — заметка к компании\n" +
+  "/pipeline — компании в работе и воронка\n" +
   "/stats — статистика и настройки\n" +
-  "/clear — сбросить отметки «написал»\n" +
+  "/clear — сбросить все статусы и заметки\n" +
   "/last — восстановить последний поиск после перезапуска";
 
+const HELP_OWNER =
+  HELP +
+  "\n\nТолько для владельца:\n" +
+  "/search кафе Казахстан — по всему Казахстану (все области)\n" +
+  "/users — заявки и пользователи\n" +
+  "/revoke ID — закрыть доступ";
+
+function isOwner(ctx) {
+  return ctx.from?.id === OWNER_ID;
+}
+
+function ownerOnly(handler) {
+  return (ctx) =>
+    isOwner(ctx)
+      ? handler(ctx)
+      : ctx.reply("Команда только для владельца.");
+}
+
+function userLabel(row) {
+  return (
+    esc(row.first_name || "Без имени") +
+    (row.username ? ` (@${esc(row.username)})` : "")
+  );
+}
+
+function accessKeyboard(userId) {
+  return new InlineKeyboard()
+    .text("✅ Одобрить", `access:ok:${userId}`)
+    .text("❌ Отклонить", `access:no:${userId}`);
+}
+
+const REQUEST_KEYBOARD = new InlineKeyboard().text(
+  "Запросить доступ",
+  "access:request"
+);
 
 /*
- * Доступ только владельцу.
+ * Доступ: владелец и одобренные пользователи.
+ * Остальным бот предлагает отправить заявку, владелец одобряет её кнопкой.
+ * Пользователи работают только в личке: их данные привязаны к chat_id.
  */
-bot.use(
-  async (ctx, next) => {
-    if (
-      ctx.from?.id !==
-      OWNER_ID
-    ) {
-      if (ctx.callbackQuery) {
-        return ctx.answerCallbackQuery(
-          {
-            text: "Нет доступа.",
-            show_alert: true,
-          }
-        );
-      }
+bot.use(async (ctx, next) => {
+  if (isOwner(ctx)) {
+    return next();
+  }
 
-      if (ctx.chat) {
-        return ctx.reply(
-          "Нет доступа."
-        );
-      }
+  if (!ctx.from || ctx.chat?.type !== "private") {
+    return;
+  }
 
-      return;
+  const access = await getAccess(ctx.from.id);
+
+  if (
+    access?.status === "approved" ||
+    ctx.callbackQuery?.data === "access:request"
+  ) {
+    return next();
+  }
+
+  if (ctx.callbackQuery) {
+    return ctx.answerCallbackQuery({
+      text: "Нет доступа.",
+      show_alert: true,
+    });
+  }
+
+  if (access?.status === "pending") {
+    return ctx.reply("Заявка на рассмотрении. Я напишу, когда доступ откроют.");
+  }
+
+  return ctx.reply(
+    (access?.status === "rejected"
+      ? "В доступе отказано. Повторную заявку можно отправить через сутки.\n\n"
+      : "Siteless — бот для поиска компаний без сайта.\n\n") +
+      "Бот закрытый: нажмите кнопку, и владелец получит заявку.",
+    { reply_markup: REQUEST_KEYBOARD }
+  );
+});
+
+
+bot.callbackQuery("access:request", async (ctx) => {
+  const access = await getAccess(ctx.from.id);
+
+  if (isOwner(ctx) || access?.status === "approved") {
+    return ctx.answerCallbackQuery({ text: "Доступ уже открыт. /help" });
+  }
+
+  const created = await requestAccess(
+    ctx.from.id,
+    ctx.from.username,
+    ctx.from.first_name
+  );
+
+  if (!created) {
+    return ctx.answerCallbackQuery({
+      text:
+        access?.status === "pending"
+          ? "Заявка уже отправлена."
+          : "Повторную заявку можно отправить через сутки после отказа.",
+      show_alert: true,
+    });
+  }
+
+  try {
+    await ctx.api.sendMessage(
+      OWNER_ID,
+      `Заявка на доступ\n${userLabel(created)}\nID: <code>${created.user_id}</code>`,
+      { parse_mode: "HTML", reply_markup: accessKeyboard(created.user_id) }
+    );
+  } catch (error) {
+    console.error("Не удалось отправить заявку владельцу:", error);
+  }
+
+  await ctx.answerCallbackQuery();
+  await ctx.reply("Заявка отправлена. Я напишу, когда доступ откроют.");
+});
+
+
+bot.callbackQuery(/^access:(ok|no):(\d+)$/, async (ctx) => {
+  // Одобренные пользователи проходят общую проверку, поэтому проверяем владельца здесь.
+  if (!isOwner(ctx)) {
+    return ctx.answerCallbackQuery({ text: "Нет доступа.", show_alert: true });
+  }
+
+  const userId = Number(ctx.match[2]);
+  const approved = ctx.match[1] === "ok";
+  const row = await setAccessStatus(userId, approved ? "approved" : "rejected");
+
+  if (!row) {
+    return ctx.answerCallbackQuery({ text: "Заявка не найдена.", show_alert: true });
+  }
+
+  try {
+    await ctx.editMessageText(
+      `${userLabel(row)}\nID: <code>${row.user_id}</code>\n\n` +
+        (approved ? "✅ Доступ открыт" : "❌ Отклонено"),
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    ignoreNotModified(error);
+  }
+
+  // Пользователь мог заблокировать бота — это не ошибка для владельца.
+  await ctx.api
+    .sendMessage(
+      userId,
+      approved
+        ? "Доступ открыт! Список команд: /help"
+        : "К сожалению, в доступе отказано."
+    )
+    .catch((error) =>
+      console.warn("Не удалось уведомить пользователя:", error.message)
+    );
+
+  await ctx.answerCallbackQuery({ text: approved ? "Одобрено" : "Отклонено" });
+});
+
+
+bot.command(
+  "users",
+  ownerOnly(async (ctx) => {
+    const rows = await listAccess();
+
+    if (rows.length === 0) {
+      return ctx.reply("Заявок и пользователей пока нет.");
     }
 
-    await next();
-  }
+    const pending = rows.filter((row) => row.status === "pending");
+    const approved = rows.filter((row) => row.status === "approved");
+
+    const line = (row) => `${userLabel(row)} — <code>${row.user_id}</code>`;
+
+    await ctx.reply(
+      `Пользователи: ${approved.length}\n` +
+        approved.map(line).join("\n") +
+        (pending.length
+          ? `\n\nЗаявки: ${pending.length} (кнопки ниже)`
+          : "") +
+        "\n\nЗакрыть доступ: /revoke ID",
+      { parse_mode: "HTML" }
+    );
+
+    for (const row of pending.slice(0, 10)) {
+      await ctx.reply(`Заявка: ${line(row)}`, {
+        parse_mode: "HTML",
+        reply_markup: accessKeyboard(row.user_id),
+      });
+    }
+  })
+);
+
+
+bot.command(
+  "revoke",
+  ownerOnly(async (ctx) => {
+    const userId = Number(ctx.match.trim());
+
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return ctx.reply("Пример: /revoke 123456789 (ID есть в /users)");
+    }
+
+    const row = await setAccessStatus(userId, "rejected");
+
+    await ctx.reply(
+      row ? "Доступ закрыт." : "Такого пользователя нет в списке."
+    );
+  })
 );
 
 
@@ -986,7 +1161,7 @@ bot.command(
 bot.command(
   ["start", "help"],
   (ctx) =>
-    ctx.reply(HELP)
+    ctx.reply(isOwner(ctx) ? HELP_OWNER : HELP)
 );
 
 
@@ -1041,6 +1216,20 @@ async function handleSearch(
   busy.add(chatId);
 
   try {
+    if (!isOwner(ctx)) {
+      if (wholeCountry) {
+        return ctx.reply(
+          "Поиск по всему Казахстану доступен только владельцу. Укажи город."
+        );
+      }
+
+      if (!(await takeSearchSlot(chatId, DAILY_SEARCH_LIMIT))) {
+        return ctx.reply(
+          `Лимит ${DAILY_SEARCH_LIMIT} поисков в день исчерпан. Попробуй завтра.`
+        );
+      }
+    }
+
     await ctx.reply(
       `Ищу: ${categoryName}, ${city}...` +
         (wholeCountry
@@ -1054,7 +1243,6 @@ async function handleSearch(
       hidden,
     } = await search(
       chatId,
-      categoryName,
       category,
       city
     );
@@ -1254,7 +1442,7 @@ bot.callbackQuery(
 
 
 /*
- * Кнопка "написал"
+ * Кнопка с номером: переключает статус компании по кругу
  */
 bot.callbackQuery(
   /^done:(\d+):(\d+)$/,
@@ -1289,15 +1477,15 @@ bot.callbackQuery(
       return ctx.answerCallbackQuery();
     }
 
-    const done = !lead.done;
+    const status = nextStatus(lead.status);
 
     // Сначала пишем в БД, и только при успехе меняем память —
     // иначе отметка в памяти разойдётся с базой.
     try {
-      await markContacted(
+      await setLeadStatus(
         chatId,
         lead.id,
-        done
+        status
       );
     } catch (error) {
       console.error(error);
@@ -1311,7 +1499,13 @@ bot.callbackQuery(
       );
     }
 
-    lead.done = done;
+    lead.status = status;
+    lead.done = Boolean(status);
+
+    // Снятие отметки удаляет и заметку.
+    if (!status) {
+      lead.note = null;
+    }
 
     await showPage(
       ctx,
@@ -1321,8 +1515,8 @@ bot.callbackQuery(
 
     await ctx.answerCallbackQuery(
       {
-        text: lead.done
-          ? "Отмечено"
+        text: status
+          ? `Статус: ${STATUSES[status].label}`
           : "Отметка снята",
       }
     );
@@ -1348,37 +1542,45 @@ bot.on(
 
 
 /*
+ * Текущий поиск: из памяти, а после перезапуска — последний из БД.
+ */
+async function currentSession(chatId) {
+  const current = sessions.get(chatId);
+
+  if (current) {
+    return current;
+  }
+
+  const result = await getLastSearchLeads(chatId);
+
+  if (!result) {
+    return null;
+  }
+
+  const session = {
+    searchId: Number(result.search.id),
+    city: result.search.city,
+    category: result.search.category,
+    leads: result.leads,
+    page: 0,
+  };
+
+  sessions.set(chatId, session);
+
+  return session;
+}
+
+
+/*
  * Экспорт CSV
  */
 bot.command(
   "export",
   async (ctx) => {
-    let session =
-      sessions.get(
+    const session =
+      await currentSession(
         ctx.chat.id
       );
-
-    if (!session) {
-      const result =
-        await getLastSearchLeads(
-          ctx.chat.id
-        );
-
-      if (result) {
-        session = {
-          searchId: Number(
-            result.search.id
-          ),
-          city:
-            result.search.city,
-          category:
-            result.search.category,
-          leads:
-            result.leads,
-          page: 0,
-        };
-      }
-    }
 
     if (
       !session ||
@@ -1411,7 +1613,8 @@ bot.command(
         "Тип",
         "Соцсеть",
         "WhatsApp",
-        "Написал",
+        "Статус",
+        "Заметка",
       ],
     ];
 
@@ -1428,9 +1631,10 @@ bot.command(
           lead,
           settings.template
         ) ?? "",
-        lead.done
-          ? "да"
+        lead.status
+          ? STATUSES[lead.status].label
           : "",
+        lead.note ?? "",
       ]);
     }
 
@@ -1455,6 +1659,84 @@ bot.command(
     );
   }
 );
+
+
+/*
+ * Заметка к компании из последнего списка
+ */
+bot.command("note", async (ctx) => {
+  const chatId = ctx.chat.id;
+  const match = ctx.match.trim().match(/^(\d+)\s*([\s\S]*)$/);
+
+  if (!match) {
+    return ctx.reply(
+      "Пример: /note 3 перезвонить в понедельник\n" +
+        "Номер — из последнего списка. /note 3 без текста удаляет заметку."
+    );
+  }
+
+  const session = await currentSession(chatId);
+
+  if (!session) {
+    return ctx.reply("Сначала сделай поиск.");
+  }
+
+  const lead = session.leads[Number(match[1]) - 1];
+
+  if (!lead) {
+    return ctx.reply(`Компании с номером ${match[1]} нет в последнем списке.`);
+  }
+
+  const note = match[2].trim();
+
+  if (note.length > 500) {
+    return ctx.reply("Слишком длинно. Максимум 500 символов.");
+  }
+
+  if (!note && !lead.note) {
+    return ctx.reply("У этой компании нет заметки.");
+  }
+
+  lead.status = await setLeadNote(chatId, lead.id, note || null);
+  lead.note = note || null;
+  lead.done = true;
+
+  await redrawPage(ctx.api, chatId, session);
+
+  await ctx.reply(
+    note ? `Заметка сохранена: ${lead.name}` : "Заметка удалена."
+  );
+});
+
+
+/*
+ * Воронка и компании в работе
+ */
+bot.command("pipeline", async (ctx) => {
+  const counts = await getStatusCounts(ctx.chat.id);
+  const rows = await getPipeline(ctx.chat.id);
+
+  const funnel = Object.entries(STATUSES)
+    .map(([key, { icon, label }]) => `${icon} ${label}: ${counts[key] ?? 0}`)
+    .join("\n");
+
+  const list = rows
+    .map(
+      (row) =>
+        `${STATUSES[row.status].icon} <b>${esc(row.name)}</b>` +
+        (row.phone ? ` · ${esc(row.phone)}` : "") +
+        (row.note ? `\n📝 ${esc(row.note)}` : "")
+    )
+    .join("\n\n");
+
+  await ctx.reply(
+    `<b>Воронка</b>\n${funnel}` +
+      (list
+        ? `\n\n<b>В работе</b>\n${list}`
+        : "\n\nКомпаний со статусом «ответил» или «клиент» пока нет."),
+    { parse_mode: "HTML" }
+  );
+});
 
 
 /*
@@ -1572,13 +1854,24 @@ bot.command(
         ctx.chat.id
       );
 
-    const contacted =
-      await getContactedCount(
+    const counts =
+      await getStatusCounts(
         ctx.chat.id
       );
 
+    const marked = Object.values(
+      counts
+    ).reduce((sum, count) => sum + count, 0);
+
+    const usage = isOwner(ctx)
+      ? ""
+      : `Поисков сегодня: ${await getSearchesToday(
+          ctx.chat.id
+        )}/${DAILY_SEARCH_LIMIT}\n`;
+
     await ctx.reply(
-      `Отмечено «написал»: ${contacted}\n` +
+      `Компаний с отметкой: ${marked} (подробно: /pipeline)\n` +
+        usage +
         `Только мобильные: ${
           settings.only_mobile
             ? "да"
@@ -1615,6 +1908,8 @@ bot.command(
       session.leads.forEach(
         (lead) => {
           lead.done = false;
+          lead.status = null;
+          lead.note = null;
         }
       );
 
@@ -1627,7 +1922,7 @@ bot.command(
     }
 
     await ctx.reply(
-      "Все отметки «написал» сброшены."
+      "Все статусы и заметки сброшены."
     );
   }
 );
@@ -1660,7 +1955,7 @@ async function shutdown(
     console.error(error);
   }
 
-  await pool.end();
+  await closeDb();
 
   process.exit(0);
 }
@@ -1685,59 +1980,36 @@ await initDb();
 /*
  * Команды Telegram-бота
  */
-await bot.api.setMyCommands([
-  {
-    command: "search",
-    description:
-      "Поиск компаний",
-  },
-  {
-    command: "business",
-    description:
-      "Основные категории бизнеса",
-  },
-  {
-    command: "social",
-    description:
-      "Показывать соцсети",
-  },
-  {
-    command: "mobile",
-    description:
-      "Только мобильные номера",
-  },
-  {
-    command: "export",
-    description:
-      "Выгрузить CSV",
-  },
-  {
-    command: "template",
-    description:
-      "Текст WhatsApp",
-  },
-  {
-    command: "stats",
-    description:
-      "Статистика",
-  },
-  {
-    command: "clear",
-    description:
-      "Сбросить отметки",
-  },
-  {
-    command: "last",
-    description:
-      "Восстановить последний поиск",
-  },
-  {
-    command: "categories",
-    description:
-      "Список категорий",
-  },
-]);
+const COMMANDS = [
+  { command: "search", description: "Поиск компаний" },
+  { command: "business", description: "Основные категории бизнеса" },
+  { command: "pipeline", description: "Компании в работе" },
+  { command: "note", description: "Заметка к компании" },
+  { command: "social", description: "Показывать соцсети" },
+  { command: "mobile", description: "Только мобильные номера" },
+  { command: "export", description: "Выгрузить CSV" },
+  { command: "template", description: "Текст WhatsApp" },
+  { command: "stats", description: "Статистика" },
+  { command: "clear", description: "Сбросить статусы" },
+  { command: "last", description: "Восстановить последний поиск" },
+  { command: "categories", description: "Список категорий" },
+];
 
+await bot.api.setMyCommands(COMMANDS);
+
+// Владельцу в меню видны и админские команды.
+await bot.api
+  .setMyCommands(
+    [
+      ...COMMANDS,
+      { command: "users", description: "Заявки и пользователи" },
+      { command: "revoke", description: "Закрыть доступ" },
+    ],
+    { scope: { type: "chat", chat_id: OWNER_ID } }
+  )
+  .catch((error) =>
+    console.warn("Не удалось задать меню владельца:", error.message)
+  );
 
 
 bot.start({
