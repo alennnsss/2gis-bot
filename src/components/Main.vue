@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import BotDemo from "./BotDemo.vue";
+import AccessForm from "./AccessForm.vue";
 
 const { t } = useI18n();
 
@@ -28,18 +30,19 @@ async function copyEmail() {
 }
 
 // тексты — в src/i18n.js, здесь только ключи
-const features = ["nosite", "mobile", "country", "csv"];
+const features = ["nosite", "mobile", "crm", "csv"];
 const steps = ["search", "filter", "write"];
+const faq = ["source", "cities", "limit", "privacy", "access"];
 
 const commands = [
   ["/search кафе Алматы", "search"],
-  ["/search кафе Казахстан", "country"],
   ["/business Алматы", "business"],
+  ["/pipeline", "pipeline"],
+  ["/note 3 перезвонить", "note"],
   ["/mobile", "mobile"],
   ["/social", "social"],
   ["/template …", "template"],
   ["/export", "export"],
-  ["/last", "last"],
   ["/stats", "stats"],
 ];
 </script>
@@ -62,6 +65,8 @@ const commands = [
         <span>{{ t(`features.${f}.text`) }}</span>
       </article>
     </section>
+
+    <BotDemo />
 
     <section id="how" class="block">
       <h2>{{ t("how.title") }}</h2>
@@ -86,15 +91,24 @@ const commands = [
       </ul>
     </section>
 
+    <section id="faq" class="block">
+      <h2>{{ t("faq.title") }}</h2>
+      <details v-for="q in faq" :key="q" class="faq-item">
+        <summary>{{ t(`faq.${q}.q`) }}</summary>
+        <p>{{ t(`faq.${q}.a`) }}</p>
+      </details>
+    </section>
+
     <section id="access" class="block access">
       <h2>{{ t("access.title") }}</h2>
       <p>{{ t("access.text", { bot }) }}</p>
+      <AccessForm :bot="bot" :bot-url="botUrl" />
+      <p class="access-or">{{ t("access.or") }}</p>
       <div class="email-row">
         <a :href="mailto" class="btn">{{ t("access.write", { email }) }}</a>
         <button type="button" class="btn secondary" @click="copyEmail">
           {{ copied ? t("access.copied") : t("access.copy") }}
         </button>
-        <a :href="botUrl" class="btn secondary" target="_blank" rel="noopener">{{ t("access.openBot") }}</a>
       </div>
     </section>
   </main>

@@ -15,6 +15,7 @@ const { t, locale } = useI18n();
       <nav class="nav">
         <RouterLink :to="{ path: '/', hash: '#how' }">{{ t("nav.how") }}</RouterLink>
         <RouterLink :to="{ path: '/', hash: '#commands' }">{{ t("nav.commands") }}</RouterLink>
+        <RouterLink :to="{ path: '/', hash: '#faq' }">{{ t("nav.faq") }}</RouterLink>
         <RouterLink to="/about">{{ t("nav.about") }}</RouterLink>
         <RouterLink :to="{ path: '/', hash: '#access' }" class="nav-cta">{{ t("nav.access") }}</RouterLink>
         <div class="lang" role="group" aria-label="Language">

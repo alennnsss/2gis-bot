@@ -69,6 +69,31 @@ export async function initDb() {
       contacted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (chat_id, source_id)
     );
+
+    -- CRM: статус компании и заметка. Старые отметки становятся «написал».
+    ALTER TABLE contacted
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'contacted'
+        CHECK (status IN ('contacted', 'replied', 'client', 'rejected'));
+    ALTER TABLE contacted ADD COLUMN IF NOT EXISTS note TEXT;
+
+    -- Заявки на доступ и одобренные пользователи (владелец здесь не хранится).
+    CREATE TABLE IF NOT EXISTS access (
+      user_id BIGINT PRIMARY KEY,
+      username TEXT,
+      first_name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      decided_at TIMESTAMPTZ
+    );
+
+    -- Сколько поисков пользователь сделал за день (для лимита).
+    CREATE TABLE IF NOT EXISTS search_usage (
+      chat_id BIGINT NOT NULL,
+      day DATE NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (chat_id, day)
+    );
   `);
 }
 
@@ -173,13 +198,14 @@ export async function saveSearchWithLeads(chatId, city, category, leads) {
   }
 }
 
-export async function markContacted(chatId, sourceId, contactedState) {
-  if (contactedState) {
+// status = null снимает отметку целиком (вместе с заметкой).
+export async function setLeadStatus(chatId, sourceId, status) {
+  if (status) {
     await pool.query(
-      `INSERT INTO contacted (chat_id, source_id)
-       VALUES ($1, $2)
-       ON CONFLICT DO NOTHING`,
-      [chatId, sourceId]
+      `INSERT INTO contacted (chat_id, source_id, status)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chat_id, source_id) DO UPDATE SET status = EXCLUDED.status`,
+      [chatId, sourceId, status]
     );
   } else {
     await pool.query(
@@ -189,12 +215,17 @@ export async function markContacted(chatId, sourceId, contactedState) {
   }
 }
 
-export async function isContacted(chatId, sourceId) {
+// Заметка без отметки невозможна: если компании ещё нет в contacted,
+// она получает статус «написал».
+export async function setLeadNote(chatId, sourceId, note) {
   const result = await pool.query(
-    `SELECT 1 FROM contacted WHERE chat_id = $1 AND source_id = $2`,
-    [chatId, sourceId]
+    `INSERT INTO contacted (chat_id, source_id, note)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (chat_id, source_id) DO UPDATE SET note = EXCLUDED.note
+     RETURNING status`,
+    [chatId, sourceId, note]
   );
-  return result.rowCount > 0;
+  return result.rows[0].status;
 }
 
 export async function getContactedIds(chatId) {
@@ -205,12 +236,28 @@ export async function getContactedIds(chatId) {
   return new Set(result.rows.map((row) => row.source_id));
 }
 
-export async function getContactedCount(chatId) {
+export async function getStatusCounts(chatId) {
   const result = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM contacted WHERE chat_id = $1`,
+    `SELECT status, COUNT(*)::int AS count
+     FROM contacted WHERE chat_id = $1
+     GROUP BY status`,
     [chatId]
   );
-  return result.rows[0].count;
+  return Object.fromEntries(result.rows.map((row) => [row.status, row.count]));
+}
+
+// Компании в работе: ответили или уже клиенты, свежие сверху.
+export async function getPipeline(chatId, limit = 30) {
+  const result = await pool.query(
+    `SELECT l.name, l.phone, l.mobile, c.status, c.note
+     FROM contacted c
+     JOIN leads l ON l.source_id = c.source_id
+     WHERE c.chat_id = $1 AND c.status IN ('replied', 'client')
+     ORDER BY c.status = 'client' DESC, c.contacted_at DESC
+     LIMIT $2`,
+    [chatId, limit]
+  );
+  return result.rows;
 }
 
 export async function clearContacted(chatId) {
@@ -249,13 +296,13 @@ export async function getSearchLeads(searchId, chatId) {
        l.mobile,
        l.site,
        l.kind,
-       EXISTS (
-         SELECT 1 FROM contacted c
-         WHERE c.chat_id = $2 AND c.source_id = l.source_id
-       ) AS done
+       c.status,
+       c.note,
+       (c.source_id IS NOT NULL) AS done
      FROM search_results sr
      JOIN searches s ON s.id = sr.search_id
      JOIN leads l ON l.source_id = sr.source_id
+     LEFT JOIN contacted c ON c.chat_id = $2 AND c.source_id = l.source_id
      WHERE sr.search_id = $1
        AND s.chat_id = $2
      ORDER BY sr.position`,
@@ -269,6 +316,78 @@ export async function getLastSearchLeads(chatId) {
   if (!search) return null;
   const leads = await getSearchLeads(search.id, chatId);
   return { search, leads };
+}
+
+// Сутки считаем по времени Алматы.
+const TODAY = `(NOW() AT TIME ZONE 'Asia/Almaty')::date`;
+
+// Атомарно засчитывает поиск. Возвращает false, если лимит на сегодня исчерпан.
+export async function takeSearchSlot(chatId, limit) {
+  const result = await pool.query(
+    `INSERT INTO search_usage (chat_id, day, count)
+     VALUES ($1, ${TODAY}, 1)
+     ON CONFLICT (chat_id, day) DO UPDATE SET count = search_usage.count + 1
+       WHERE search_usage.count < $2
+     RETURNING count`,
+    [chatId, limit]
+  );
+  return result.rowCount > 0;
+}
+
+export async function getSearchesToday(chatId) {
+  const result = await pool.query(
+    `SELECT count FROM search_usage WHERE chat_id = $1 AND day = ${TODAY}`,
+    [chatId]
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
+export async function getAccess(userId) {
+  const result = await pool.query(
+    `SELECT * FROM access WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows[0] ?? null;
+}
+
+// Новая заявка или повторная — не раньше чем через сутки после отказа.
+// Одобренного не трогаем.
+// Возвращает строку, если заявка действительно создана (её надо показать владельцу).
+export async function requestAccess(userId, username, firstName) {
+  const result = await pool.query(
+    `INSERT INTO access (user_id, username, first_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET
+       username = EXCLUDED.username,
+       first_name = EXCLUDED.first_name,
+       status = 'pending',
+       requested_at = NOW(),
+       decided_at = NULL
+       WHERE access.status = 'rejected'
+         AND access.decided_at < NOW() - INTERVAL '1 day'
+     RETURNING *`,
+    [userId, username ?? null, firstName ?? ""]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function setAccessStatus(userId, status) {
+  const result = await pool.query(
+    `UPDATE access SET status = $2, decided_at = NOW()
+     WHERE user_id = $1
+     RETURNING *`,
+    [userId, status]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function listAccess() {
+  const result = await pool.query(
+    `SELECT * FROM access
+     WHERE status IN ('pending', 'approved')
+     ORDER BY status = 'pending' DESC, requested_at DESC`
+  );
+  return result.rows;
 }
 
 export async function closeDb() {

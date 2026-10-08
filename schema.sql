@@ -47,3 +47,25 @@ CREATE TABLE IF NOT EXISTS contacted (
   contacted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (chat_id, source_id)
 );
+
+ALTER TABLE contacted
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'contacted'
+    CHECK (status IN ('contacted', 'replied', 'client', 'rejected'));
+ALTER TABLE contacted ADD COLUMN IF NOT EXISTS note TEXT;
+
+CREATE TABLE IF NOT EXISTS access (
+  user_id BIGINT PRIMARY KEY,
+  username TEXT,
+  first_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS search_usage (
+  chat_id BIGINT NOT NULL,
+  day DATE NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (chat_id, day)
+);
