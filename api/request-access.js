@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   const text =
     `Заявка с сайта: @${esc(username)}\n` +
     (nicheText ? `Город / ниша: ${esc(nicheText)}\n` : "") +
-    "\nКогда человек откроет бота и нажмёт «Запросить доступ», придут кнопки «Одобрить» / «Отклонить».";
+    "\nКак только человек напишет боту, придёт заявка с кнопками «Одобрить» / «Отклонить».";
 
   const response = await fetch(
     `https://api.telegram.org/bot${API_TOKEN}/sendMessage`,

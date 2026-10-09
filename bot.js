@@ -975,9 +975,22 @@ const REQUEST_KEYBOARD = new InlineKeyboard().text(
   "access:request"
 );
 
+async function notifyOwner(api, row) {
+  try {
+    await api.sendMessage(
+      OWNER_ID,
+      `Заявка на доступ\n${userLabel(row)}\nID: <code>${row.user_id}</code>`,
+      { parse_mode: "HTML", reply_markup: accessKeyboard(row.user_id) }
+    );
+  } catch (error) {
+    console.error("Не удалось отправить заявку владельцу:", error);
+  }
+}
+
 /*
  * Доступ: владелец и одобренные пользователи.
- * Остальным бот предлагает отправить заявку, владелец одобряет её кнопкой.
+ * Новый человек при первом сообщении сразу попадает в заявки, владельцу
+ * приходят кнопки. После отказа — повторная заявка кнопкой.
  * Пользователи работают только в личке: их данные привязаны к chat_id.
  */
 bot.use(async (ctx, next) => {
@@ -1009,11 +1022,25 @@ bot.use(async (ctx, next) => {
     return ctx.reply("Заявка на рассмотрении. Я напишу, когда доступ откроют.");
   }
 
+  if (!access) {
+    const created = await requestAccess(
+      ctx.from.id,
+      ctx.from.username,
+      ctx.from.first_name
+    );
+
+    if (created) {
+      await notifyOwner(ctx.api, created);
+    }
+
+    return ctx.reply(
+      "Siteless — бот для поиска компаний без сайта.\n\n" +
+        "Бот закрытый. Заявка на доступ уже отправлена владельцу — я напишу, когда доступ откроют."
+    );
+  }
+
   return ctx.reply(
-    (access?.status === "rejected"
-      ? "В доступе отказано. Повторную заявку можно отправить через сутки.\n\n"
-      : "Siteless — бот для поиска компаний без сайта.\n\n") +
-      "Бот закрытый: нажмите кнопку, и владелец получит заявку.",
+    "В доступе отказано. Повторную заявку можно отправить через сутки.",
     { reply_markup: REQUEST_KEYBOARD }
   );
 });
@@ -1042,15 +1069,7 @@ bot.callbackQuery("access:request", async (ctx) => {
     });
   }
 
-  try {
-    await ctx.api.sendMessage(
-      OWNER_ID,
-      `Заявка на доступ\n${userLabel(created)}\nID: <code>${created.user_id}</code>`,
-      { parse_mode: "HTML", reply_markup: accessKeyboard(created.user_id) }
-    );
-  } catch (error) {
-    console.error("Не удалось отправить заявку владельцу:", error);
-  }
+  await notifyOwner(ctx.api, created);
 
   await ctx.answerCallbackQuery();
   await ctx.reply("Заявка отправлена. Я напишу, когда доступ откроют.");

@@ -59,7 +59,7 @@ const messages = {
     },
     access: {
       title: "Получить доступ",
-      text: "Бот закрытый. Оставьте заявку, затем откройте {bot} и нажмите «Запросить доступ» — после одобрения бот пришлёт сообщение.",
+      text: "Бот закрытый. Оставьте заявку, затем откройте {bot} и нажмите Start — после одобрения бот пришлёт сообщение.",
       or: "Или напишите на почту",
       mail: "Написать письмо",
       copy: "Скопировать email",
@@ -76,7 +76,7 @@ const messages = {
       nichePlaceholder: "Алматы, сайты для кафе",
       submit: "Отправить заявку",
       sending: "Отправляю…",
-      sent: "Заявка отправлена! Теперь откройте {bot} и нажмите «Запросить доступ».",
+      sent: "Заявка отправлена! Теперь откройте {bot} и нажмите Start.",
       error: "Не получилось отправить заявку. Напишите на почту, ответим так же быстро.",
     },
     faq: {
@@ -159,7 +159,7 @@ const messages = {
     },
     access: {
       title: "Get access",
-      text: "The bot is private. Leave a request, then open {bot} and tap “Запросить доступ” (Request access) — the bot will message you once you are approved.",
+      text: "The bot is private. Leave a request, then open {bot} and tap Start — the bot will message you once you are approved.",
       or: "Or email me",
       mail: "Send an email",
       copy: "Copy email",
@@ -176,7 +176,7 @@ const messages = {
       nichePlaceholder: "Almaty, websites for cafes",
       submit: "Send request",
       sending: "Sending…",
-      sent: "Request sent! Now open {bot} and tap “Запросить доступ” (Request access).",
+      sent: "Request sent! Now open {bot} and tap Start.",
       error: "Could not send the request. Please email me instead — I reply just as fast.",
     },
     faq: {
