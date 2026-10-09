@@ -14,12 +14,12 @@ const STATUSES = {
 const CYCLE = [null, "contacted", "replied", "client", "rejected"];
 
 const leads = ref([
-  { name: "Кафе «Пример»", address: "ул. Абая, 10", phone: "+7 700 000 00 01", mobile: true, status: "contacted" },
-  { name: "Кофейня «Демо»", address: "пр. Достык, 25", phone: "+7 700 000 00 02", mobile: true, status: null },
-  { name: "Пекарня «Образец»", address: "ул. Сатпаева, 5", phone: "+7 727 000 00 03", mobile: false, status: null },
-  { name: "Барбершоп «Тест»", address: "ул. Жандосова, 40", phone: "+7 700 000 00 04", mobile: true, status: null },
-  { name: "Цветы «Макет»", address: "ул. Толе би, 77", phone: "+7 700 000 00 05", mobile: true, status: null },
-  { name: "Автомойка «Шаблон»", address: "пр. Райымбека, 120", phone: "+7 727 000 00 06", mobile: false, status: null },
+  { name: "Кафе «Ромашка»", address: "ул. Абая, 10", phone: "+7 700 000 00 01", mobile: true, status: "contacted" },
+  { name: "Кофейня «Утро»", address: "пр. Достык, 25", phone: "+7 700 000 00 02", mobile: true, status: null },
+  { name: "Пекарня «Колосок»", address: "ул. Сатпаева, 5", phone: "+7 727 000 00 03", mobile: false, status: null },
+  { name: "Барбершоп «Борода»", address: "ул. Жандосова, 40", phone: "+7 700 000 00 04", mobile: true, status: null },
+  { name: "Цветы «Ландыш»", address: "ул. Толе би, 77", phone: "+7 700 000 00 05", mobile: true, status: null },
+  { name: "Автомойка «Блеск»", address: "пр. Райымбека, 120", phone: "+7 727 000 00 06", mobile: false, status: null },
 ]);
 
 const page = ref(0);

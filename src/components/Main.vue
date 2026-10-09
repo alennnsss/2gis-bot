@@ -69,11 +69,11 @@ const commands = [
         <div class="promo-visual mini-chat" aria-hidden="true">
           <div class="b out">/search кафе Алматы</div>
           <div class="b in">
-            <strong>1. ✅ Кафе «Пример»</strong>
+            <strong>1. ✅ Кафе «Ромашка»</strong>
             <span>📞 +7 700 000 00 01 · WhatsApp</span>
           </div>
           <div class="b in">
-            <strong>2. Кофейня «Демо»</strong>
+            <strong>2. Кофейня «Утро»</strong>
             <span>📞 +7 700 000 00 02 · WhatsApp</span>
           </div>
         </div>
